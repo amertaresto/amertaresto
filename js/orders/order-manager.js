@@ -49,6 +49,11 @@ export function processOrder() {
         
         // Tampilkan struk
         showOrderReceipt(orderData);
+
+        // Tunggu sedikit agar DOM selesai merender sebelum cetak otomatis
+        setTimeout(() => {
+        printReceipt();
+        }, 100); // Delay kecil agar DOM render selesai
         
         // Kosongkan keranjang
         localStorage.removeItem('amerta_cart');
