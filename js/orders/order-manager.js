@@ -1,257 +1,258 @@
 // js/orders/order-manager.js
-// Order Management System dengan Firebase Integration
 
-// Import Firebase dependencies
-import { auth, db } from '../firebase-config.js';
-import { 
-    ref, 
-    push, 
-    set, 
-    serverTimestamp, 
-    get,
-    query,
-    orderByChild,
-    equalTo,
-    limitToLast
-} from "https://www.gstatic.com/firebasejs/11.8.1/firebase-database.js";
-
-// ================================
-// ORDER CORE FUNCTIONS
-// ================================
-
-function generateOrderNumber() {
-    return 'AMR' + Date.now();
-}
-
-async function getUserInfo() {
-    const user = auth.currentUser;
-    if (user) {
-        try {
-            const userRef = ref(db, `users/${user.uid}`);
-            const snapshot = await get(userRef);
-            if (snapshot.exists()) {
-                return {
-                    userId: user.uid,
-                    email: user.email,
-                    namaLengkap: snapshot.val().namaLengkap || user.displayName || 'User',
-                    profileComplete: snapshot.val().profileComplete || false
-                };
-            }
-        } catch (error) {
-            console.error('Error getting user info:', error);
-        }
+// Fungsi untuk memproses pesanan
+export function processOrder() {
+    const customerName = document.getElementById('customerName').value.trim();
+    const tableNumber = document.getElementById('tableNumber').value.trim();
+    
+    // Validasi input
+    if (!customerName || !tableNumber) {
+        alert('Mohon lengkapi nama dan nomor meja!');
+        return;
     }
-    return null;
-}
-
-function validateOrderData(orderData) {
-    const errors = [];
-    if (!orderData.customerInfo?.name?.trim()) errors.push('Nama pelanggan wajib diisi');
-    if (!orderData.customerInfo?.tableNumber?.trim()) errors.push('Nomor meja wajib diisi');
-    if (!orderData.items || orderData.items.length === 0) errors.push('Pesanan tidak boleh kosong');
-    if (!orderData.pricing?.total || orderData.pricing.total <= 0) errors.push('Total pesanan tidak valid');
-    return errors;
-}
-
-async function createOrderData(customerInfo, cartItems, pricing, promoCode = '') {
-    const userInfo = await getUserInfo();
-    const orderNumber = generateOrderNumber();
-
-    const customerName = String(customerInfo?.name ?? '').trim();
-    const tableNumber = String(customerInfo?.tableNumber ?? '').trim();
-
-    const processedItems = cartItems.map(item => ({
-        id: item.id || '',
-        name: item.name || '',
-        price: Number(item.price) || 0,
-        quantity: Number(item.quantity) || 0,
-        subtotal: (Number(item.price) || 0) * (Number(item.quantity) || 0),
-        notes: item.notes || '',
-        category: item.category || '',
-        image: item.image || ''
-    }));
-
-    return {
-        orderNumber,
-        customerInfo: {
-            name: customerName,
+    
+    // Ambil data keranjang
+    const cart = JSON.parse(localStorage.getItem('amerta_cart') || '[]');
+    
+    if (cart.length === 0) {
+        alert('Keranjang belanja kosong!');
+        return;
+    }
+    
+    // Ubah tombol menjadi loading
+    const orderBtn = document.querySelector('.order_btn');
+    const originalText = orderBtn.textContent;
+    orderBtn.textContent = 'Memproses Pesanan...';
+    orderBtn.disabled = true;
+    
+    // Simulasi proses pesanan (3 detik)
+    setTimeout(() => {
+        // Generate order ID
+        const orderId = generateOrderId();
+        
+        // Hitung total
+        const orderSummary = calculateOrderSummary(cart);
+        
+        // Buat data pesanan
+        const orderData = {
+            id: orderId,
+            customerName: customerName,
             tableNumber: tableNumber,
-            ...(userInfo && {
-                email: userInfo.email,
-                userId: userInfo.userId
-            })
-        },
-        items: processedItems,
-        pricing: {
-            subtotal: Number(pricing.subtotal) || 0,
-            discount: Number(pricing.discount) || 0,
-            promoCode: promoCode || '',
-            total: Number(pricing.total) || 0
-        },
-        status: 'pending',
-        timestamps: {
-            ordered: serverTimestamp(),
-            confirmed: null,
-            preparing: null,
-            ready: null,
-            completed: null
-        },
-        metadata: {
-            source: 'web',
-            deviceInfo: {
-                userAgent: navigator.userAgent,
-                timestamp: new Date().toISOString(),
-                language: navigator.language
-            }
-        }
+            items: cart,
+            summary: orderSummary,
+            timestamp: new Date(),
+            status: 'confirmed'
+        };
+        
+        // Simpan pesanan ke localStorage
+        saveOrder(orderData);
+        
+        // Tampilkan struk
+        showOrderReceipt(orderData);
+        
+        // Kosongkan keranjang
+        localStorage.removeItem('amerta_cart');
+        
+        // Reset tombol
+        orderBtn.textContent = originalText;
+        orderBtn.disabled = false;
+        
+    }, 3000);
+}
+
+// Fungsi untuk generate Order ID
+function generateOrderId() {
+    const timestamp = Date.now();
+    const random = Math.floor(Math.random() * 1000);
+    return `AMR${timestamp}${random}`.slice(-10);
+}
+
+// Fungsi untuk menghitung ringkasan pesanan
+function calculateOrderSummary(cart) {
+    const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    
+    // Ambil diskon yang sudah diterapkan (jika ada)
+    const discountAmount = parseInt(document.querySelector('.summary_row:nth-child(2) span:last-child').textContent.replace(/[^0-9]/g, '')) || 0;
+    
+    const total = subtotal - discountAmount;
+    
+    return {
+        subtotal: subtotal,
+        discount: discountAmount,
+        total: total
     };
 }
 
-async function saveOrderToFirebase(orderData) {
-    try {
-        const validationErrors = validateOrderData(orderData);
-        if (validationErrors.length > 0) throw new Error(validationErrors.join(', '));
-
-        const newOrderRef = push(ref(db, 'orders'));
-        await set(newOrderRef, orderData);
-
-        return {
-            success: true,
-            orderId: newOrderRef.key,
-            orderNumber: orderData.orderNumber,
-            data: orderData
-        };
-    } catch (error) {
-        console.error('Error saving order:', error);
-        return { success: false, error: error.message };
-    }
+// Fungsi untuk menyimpan pesanan
+function saveOrder(orderData) {
+    const orders = JSON.parse(localStorage.getItem('amerta_orders') || '[]');
+    orders.push(orderData);
+    localStorage.setItem('amerta_orders', JSON.stringify(orders));
 }
 
-// ================================
-// UI Notification Functions
-// ================================
-
-function showOrderSuccessNotification(orderData) {
-    const n = document.createElement('div');
-    n.className = 'order-success-notification';
-    n.innerHTML = `
-        <div class="notification-content">
-            <div class="success-icon"><i class="fa fa-check-circle"></i></div>
-            <div class="success-message">
-                <h4>Pesanan Berhasil Disimpan!</h4>
-                <p>Order #${orderData.orderNumber}</p>
-                <small>Data pesanan telah dikirim ke dapur</small>
+// Fungsi untuk menampilkan struk pesanan
+function showOrderReceipt(orderData) {
+    const receiptHTML = `
+        <div class="receipt-overlay" id="receiptOverlay">
+            <div class="receipt-container">
+                <div class="receipt-header">
+                    <button class="close-receipt" onclick="closeReceipt()">&times;</button>
+                    <h2>STRUK PESANAN</h2>
+                    <div class="restaurant-info">
+                        <h3>AMERTA RESTAURANT</h3>
+                        <p>Jl. Kuliner No. 123, Jakarta</p>
+                        <p>Telp: (021) 1234-5678</p>
+                    </div>
+                </div>
+                
+                <div class="receipt-content">
+                    <div class="order-info">
+                        <div class="info-row">
+                            <span>Order ID:</span>
+                            <span>${orderData.id}</span>
+                        </div>
+                        <div class="info-row">
+                            <span>Nama:</span>
+                            <span>${orderData.customerName}</span>
+                        </div>
+                        <div class="info-row">
+                            <span>Meja:</span>
+                            <span>${orderData.tableNumber}</span>
+                        </div>
+                        <div class="info-row">
+                            <span>Tanggal:</span>
+                            <span>${formatDate(orderData.timestamp)}</span>
+                        </div>
+                        <div class="info-row">
+                            <span>Waktu:</span>
+                            <span>${formatTime(orderData.timestamp)}</span>
+                        </div>
+                    </div>
+                    
+                    <div class="order-items">
+                        <h4>DETAIL PESANAN</h4>
+                        <div class="items-list">
+                            ${orderData.items.map(item => `
+                                <div class="item-row">
+                                    <div class="item-info">
+                                        <span class="item-name">${item.name}</span>
+                                        <span class="item-quantity">${item.quantity}x</span>
+                                    </div>
+                                    <span class="item-price">Rp ${item.price.toLocaleString('id-ID')}</span>
+                                    <span class="item-total">Rp ${(item.price * item.quantity).toLocaleString('id-ID')}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                    
+                    <div class="order-summary">
+                        <div class="summary-row">
+                            <span>Subtotal:</span>
+                            <span>Rp ${orderData.summary.subtotal.toLocaleString('id-ID')}</span>
+                        </div>
+                        ${orderData.summary.discount > 0 ? `
+                            <div class="summary-row">
+                                <span>Diskon:</span>
+                                <span>-Rp ${orderData.summary.discount.toLocaleString('id-ID')}</span>
+                            </div>
+                        ` : ''}
+                        <div class="summary-row total">
+                            <span>TOTAL:</span>
+                            <span>Rp ${orderData.summary.total.toLocaleString('id-ID')}</span>
+                        </div>
+                    </div>
+                    
+                    <div class="receipt-footer">
+                        <p>Terima kasih atas pesanan Anda!</p>
+                        <p>Makanan akan segera disiapkan</p>
+                        <p class="order-status">Status: <span class="status-confirmed">DIKONFIRMASI</span></p>
+                    </div>
+                </div>
+                
+                <div class="receipt-actions">
+                    <button class="btn btn-print" onclick="printReceipt()">
+                        <i class="fa fa-print"></i> Cetak Struk
+                    </button>
+                    <button class="btn btn-home" onclick="goToHome()">
+                        <i class="fa fa-home"></i> Kembali ke Beranda
+                    </button>
+                </div>
             </div>
-        </div>`;
-    n.style.cssText = `
-        position:fixed;top:20px;right:20px;z-index:9999;
-        background:#28a745;color:white;padding:20px;border-radius:10px;
-        box-shadow:0 8px 32px rgba(40,167,69,0.3);opacity:0;transition:all .3s ease;`;
-    document.body.appendChild(n);
-    setTimeout(() => n.style.opacity = '1', 100);
-    setTimeout(() => {
-        n.style.opacity = '0';
-        setTimeout(() => document.body.removeChild(n), 300);
-    }, 4000);
+        </div>
+    `;
+    
+    // Tambahkan HTML ke body
+    document.body.insertAdjacentHTML('beforeend', receiptHTML);
+    
+    // Tampilkan overlay
+    document.getElementById('receiptOverlay').style.display = 'flex';
 }
 
-function showOrderErrorNotification(errorMsg) {
-    const n = document.createElement('div');
-    n.className = 'order-error-notification';
-    n.innerHTML = `
-        <div class="notification-content">
-            <div class="error-icon"><i class="fa fa-exclamation-triangle"></i></div>
-            <div class="error-message">
-                <h4>Gagal Menyimpan Pesanan</h4>
-                <p>${errorMsg}</p>
-                <small>Silakan coba lagi atau hubungi staf</small>
-            </div>
-        </div>`;
-    n.style.cssText = `
-        position:fixed;top:20px;right:20px;z-index:9999;
-        background:#dc3545;color:white;padding:20px;border-radius:10px;
-        box-shadow:0 8px 32px rgba(220,53,69,0.3);opacity:0;transition:all .3s ease;`;
-    document.body.appendChild(n);
-    setTimeout(() => n.style.opacity = '1', 100);
-    setTimeout(() => {
-        n.style.opacity = '0';
-        setTimeout(() => document.body.removeChild(n), 400);
-    }, 5000);
+// Fungsi untuk format tanggal
+function formatDate(timestamp) {
+    const date = new Date(timestamp);
+    const options = { 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric' 
+    };
+    return date.toLocaleDateString('id-ID', options);
 }
 
-// ================================
-// Cart Utility + Order Processing
-// ================================
-
-function getCart() {
-    const cart = localStorage.getItem('amerta_cart');
-    return cart ? JSON.parse(cart) : [];
+// Fungsi untuk format waktu
+function formatTime(timestamp) {
+    const date = new Date(timestamp);
+    return date.toLocaleTimeString('id-ID', { 
+        hour: '2-digit', 
+        minute: '2-digit' 
+    });
 }
 
-function clearCart() {
-    localStorage.removeItem('amerta_cart');
-    const counter = document.getElementById('cartCount');
-    if (counter) {
-        counter.textContent = '0';
-        counter.style.display = 'none';
+// Fungsi untuk menutup struk
+window.closeReceipt = function() {
+    const overlay = document.getElementById('receiptOverlay');
+    if (overlay) {
+        overlay.remove();
     }
-}
+};
 
-async function processOrder() {
-    const name = document.getElementById('customerName')?.value.trim();
-    const table = document.getElementById('tableNumber')?.value.trim();
-    const cart = getCart();
+// Fungsi untuk cetak struk
+window.printReceipt = function() {
+    const printContent = document.querySelector('.receipt-container').innerHTML;
+    const printWindow = window.open('', '_blank');
+    printWindow.document.write(`
+        <html>
+        <head>
+            <title>Struk Pesanan - ${generateOrderId()}</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 20px; }
+                .receipt-container { max-width: 400px; margin: 0 auto; }
+                .receipt-header { text-align: center; margin-bottom: 20px; }
+                .restaurant-info h3 { margin: 0; }
+                .order-info, .order-items, .order-summary { margin: 20px 0; }
+                .info-row, .item-row, .summary-row { 
+                    display: flex; 
+                    justify-content: space-between; 
+                    margin: 5px 0; 
+                }
+                .total { font-weight: bold; border-top: 1px solid #000; padding-top: 5px; }
+                .receipt-footer { text-align: center; margin-top: 20px; }
+                .close-receipt, .receipt-actions { display: none; }
+                @media print {
+                    body { margin: 0; }
+                }
+            </style>
+        </head>
+        <body>
+            ${printContent}
+        </body>
+        </html>
+    `);
+    printWindow.document.close();
+    printWindow.print();
+};
 
-    if (!name || !table || cart.length === 0) {
-        alert('Mohon lengkapi nama, nomor meja, dan isi keranjang terlebih dahulu.');
-        return;
-    }
-
-    const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
-    const total = subtotal;
-
-    const customerInfo = { name, tableNumber };
-    const pricing = { subtotal, discount: 0, total };
-
-    try {
-        const orderData = await createOrderData(customerInfo, cart, pricing);
-        const result = await saveOrderToFirebase(orderData);
-
-        if (result.success) {
-            localStorage.setItem('amerta_receipt', JSON.stringify({
-                orderId: result.orderId,
-                orderNumber: result.orderNumber,
-                customerName: name,
-                tableNumber: table,
-                timestamp: Date.now(),
-                items: cart
-            }));
-            clearCart();
-            showOrderSuccessNotification(orderData);
-            setTimeout(() => window.location.href = 'receipt.html', 1000);
-        } else {
-            showOrderErrorNotification(result.error);
-        }
-    } catch (err) {
-        console.error('Gagal proses order:', err);
-        showOrderErrorNotification(err.message);
-    }
-}
-
-// ================================
-// Event Listener
-// ================================
-document.addEventListener('DOMContentLoaded', () => {
-    const btn = document.querySelector('.order_btn');
-    if (btn) btn.addEventListener('click', processOrder);
-});
-
-export {
-  createOrderData,
-  saveOrderToFirebase,
-  showOrderSuccessNotification,
-  showOrderErrorNotification,
-  processOrder,
-  getCart,
-  clearCart
+// Fungsi untuk kembali ke beranda
+window.goToHome = function() {
+    window.location.href = 'index.html';
 };
